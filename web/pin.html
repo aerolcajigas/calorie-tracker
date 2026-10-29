@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Calories</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Calories">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#12100d">
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png">
+<link rel="icon" href="/icon-32.png" type="image/png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+/* PIN screen: PIN -> /api/login -> 1-year cookie. */
+:root { --bg: #12100d; --panel: #1c1915; --line: #342e27; --text: #f4eee6; --muted: #a89e90; --accent: #d47228; --accent2: #ee8b3f; --ink: #1b1007; --bad: #ff7a66;
+  --ease: cubic-bezier(.16, 1, .3, 1); color-scheme: dark; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 15px/1.5 Manrope, system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased;
+  display: grid; place-items: center; padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom); }
+main { width: min(320px, 100%); text-align: center; }
+.mark { width: 68px; height: 68px; border-radius: 16px; display: block; margin: 0 auto 16px; }
+h1 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
+p { margin: 6px 0 26px; color: var(--muted); }
+.dots { display: flex; justify-content: center; gap: 16px; margin-bottom: 18px; }
+.dots i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); transition: background .2s var(--ease), border-color .2s, transform .25s var(--ease); }
+.dots i.on { background: var(--accent); border-color: var(--accent); transform: scale(1.1); }
+.dots.bad { animation: shake .4s var(--ease); }
+.dots.bad i.on { background: var(--bad); border-color: var(--bad); }
+@keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+@media (prefers-reduced-motion: reduce) { .dots.bad { animation: none; } }
+.msg { min-height: 22px; font-size: 14px; color: var(--bad); margin-bottom: 14px; }
+.pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.pad button { height: 66px; border-radius: 50%; aspect-ratio: 1; justify-self: center; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  font: 700 26px/1 Manrope, sans-serif; cursor: pointer; transition: transform .12s var(--ease); }
+.pad button:active { transform: scale(.92); background: var(--accent); color: var(--ink); border-color: var(--accent); }
+.pad button:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+.pad .fn { background: none; border-color: transparent; color: var(--muted); }
+.pad .fn:active { background: none; color: var(--text); }
+.pad .fn svg { width: 24px; height: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <img class="mark" src="/icon-180.png" alt="">
+  <h1>Calories</h1>
+  <p>Enter your PIN</p>
+  <div class="dots" id="dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="msg" id="msg" role="status" aria-live="polite"></div>
+  <div class="pad" id="pad">
+    <button>1</button><button>2</button><button>3</button>
+    <button>4</button><button>5</button><button>6</button>
+    <button>7</button><button>8</button><button>9</button>
+    <span></span><button>0</button>
+    <button class="fn" data-k="del" aria-label="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h11v14H9l-6-7z"/><path d="m12.5 9.5 5 5m0-5-5 5"/></svg></button>
+  </div>
+</main>
+<script>
+let pin = '', busy = false;
+const dots = [...document.querySelectorAll('#dots i')], msg = document.getElementById('msg');
+const paint = () => dots.forEach((d, i) => d.classList.toggle('on', i < pin.length));
+async function submit() {
+  busy = true; msg.textContent = '';
+  try {
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'login', p: { pin } }) });
+    const j = (await r.json()).r || {};
+    if (j.ok && j.token) {
+      // One year on this device (the home-screen app keeps its own cookies, so it asks once too).
+      document.cookie = `cal_pin=${j.token}; Max-Age=31536000; Path=/; Secure; SameSite=Lax`;
+      location.replace('/');
+      return;
+    }
+    msg.textContent = j.error || 'Something went wrong. Try again.';
+  } catch { msg.textContent = 'Could not reach the server. Check your connection.'; }
+  document.getElementById('dots').classList.add('bad');
+  setTimeout(() => { document.getElementById('dots').classList.remove('bad'); pin = ''; paint(); busy = false; }, 450);
+}
+function press(k) {
+  if (busy) return;
+  if (k === 'del') pin = pin.slice(0, -1);
+  else if (/^\d$/.test(k) && pin.length < 4) pin += k;
+  paint();
+  if (pin.length === 4) submit();
+}
+document.getElementById('pad').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) press(b.dataset.k || b.textContent.trim()); });
+addEventListener('keydown', (e) => { if (/^\d$/.test(e.key)) press(e.key); else if (e.key === 'Backspace') press('del'); });
+</script>
+</body>
+</html>

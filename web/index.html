@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Calories</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Calories">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#12100d">
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png">
+<link rel="icon" href="/icon-32.png" type="image/png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* Calories: warm dark kitchen look. Chart colors validated (dataviz validator, dark surface #1c1915):
+   daily bars #3d8fc4, 7-day average line = accent #d47228. */
+:root { --bg: #12100d; --panel: #1c1915; --panel2: #25211c; --line: #342e27; --grid: #2a2520; --text: #f4eee6; --muted: #a89e90; --dim: #7a7166;
+  --accent: #d47228; --accent2: #ee8b3f; --ink: #1b1007; --bar: #3d8fc4; --over: #e5564b; --ease: cubic-bezier(.16, 1, .3, 1);
+  --top: env(safe-area-inset-top); --bot: env(safe-area-inset-bottom); color-scheme: dark; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* App shell: nothing is pinned with position: fixed. iOS home-screen apps sometimes launch measuring the screen as if
+   Safari's bottom toolbar were there, which lifted a fixed tab bar. Instead the body is sized to the real screen in JS
+   (--appH, see fit()) and the tab bar sits in normal flow under the one scrolling area. */
+html { height: 100%; background: var(--bg); }
+body { margin: 0; height: var(--appH, 100%); overflow: hidden; background: var(--bg); color: var(--text);
+  font: 15px/1.45 Manrope, system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
+.app { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain;
+  padding: calc(var(--top) + 6px) 0 24px; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+main { max-width: 480px; margin: 0 auto; padding: 0 16px; }
+
+/* header */
+.top { max-width: 480px; margin: 0 auto; padding: 8px 16px 4px; display: flex; align-items: center; justify-content: space-between; }
+.top h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+.top .r { display: flex; align-items: center; gap: 6px; }
+.sync { font-size: 12.5px; color: var(--dim); opacity: 0; transition: opacity .3s; }
+.sync.on { opacity: 1; }
+.icon { width: 40px; height: 40px; border-radius: 12px; border: 0; background: none; display: grid; place-items: center; color: var(--muted); }
+.icon:active { background: var(--panel2); }
+.icon:disabled { opacity: .25; }
+.icon svg { width: 22px; height: 22px; }
+
+/* day */
+.daynav { display: flex; align-items: center; justify-content: space-between; margin: 4px -6px 10px; }
+.dayname { text-align: center; }
+.dayname b { display: block; font-size: 16px; font-weight: 700; }
+.dayname span { font-size: 12.5px; color: var(--muted); }
+.dayname button { border: 0; background: none; color: var(--accent2); font-size: 12.5px; font-weight: 700; padding: 0 0 0 6px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; }
+.hero { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
+.ring { width: 102px; height: 102px; flex: none; }
+.ring circle { fill: none; stroke-width: 12; }
+.ring .track { stroke: #2d2822; }
+.ring .fill { stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray .6s var(--ease); }
+.ring .over { stroke: var(--over); stroke-linecap: round; transition: stroke-dasharray .6s var(--ease); }
+.ring text { fill: var(--text); font-weight: 700; font-size: 15px; text-anchor: middle; }
+.ring .pct { fill: var(--muted); font-size: 11.5px; font-weight: 600; }
+.hero .big { font-size: 42px; font-weight: 800; line-height: 1; letter-spacing: -.03em; }
+.hero .lbl { color: var(--muted); font-size: 13.5px; margin-top: 3px; display: flex; align-items: center; gap: 6px; }
+.hero .lbl i { width: 8px; height: 8px; border-radius: 50%; background: var(--over); }
+.hero .eaten { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.hero .eaten b { color: var(--text); font-weight: 700; }
+
+.sechead { display: flex; align-items: center; justify-content: space-between; margin: 18px 0 10px; }
+.sechead h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.sechead .btns { display: flex; gap: 8px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--panel); font-size: 14px; font-weight: 700; transition: transform .12s var(--ease); }
+.pill:active { transform: scale(.95); }
+.pill svg { width: 18px; height: 18px; }
+.pill.cam { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+.pill.cam:active { background: var(--accent2); }
+
+.recent-label { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 2px 0 8px; }
+/* Recent: a vertical list (the user didn't like the sideways scroll). First 5 rows, the rest behind "Show all". */
+.recent { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; margin-bottom: 6px; }
+.rc { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px; border: 0; border-top: 1px solid var(--grid);
+  background: none; text-align: left; transition: background .2s; }
+.rc:first-child { border-top: 0; }
+.rc:active { background: var(--panel2); }
+.rc .em { width: 24px; flex: none; text-align: center; font-size: 20px; line-height: 1; }
+.rc b { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc small { flex: none; font-size: 13px; color: var(--muted); }
+.rc .plus { width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--panel2); color: var(--accent2); }
+.rc .plus svg { width: 16px; height: 16px; }
+.rc.added { background: #2c2116; }
+.rc.added .plus { background: var(--accent); color: var(--ink); }
+.more { display: block; margin: 0 0 14px; }
+.today-label { margin-top: 16px; }
+
+.list { display: flex; flex-direction: column; gap: 2px; }
+.entry { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 12px; border: 0; border-radius: 14px; background: none; text-align: left; }
+.entry:active { background: var(--panel); }
+.entry .em { width: 42px; height: 42px; flex: none; border-radius: 12px; background: var(--panel2); display: grid; place-items: center; font-size: 22px; }
+.entry .mid { flex: 1; min-width: 0; }
+.entry b { display: block; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.entry small { color: var(--muted); font-size: 12.5px; }
+.entry .kc { font-weight: 800; font-size: 16px; }
+.entry .kc span { font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 2px; }
+.entry.pending { opacity: .6; }
+.empty { padding: 26px 18px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 16px; font-size: 14px; }
+
+/* trends */
+.seg { display: inline-flex; padding: 3px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+.seg button { border: 0; background: none; padding: 6px 14px; border-radius: 9px; font-size: 13.5px; font-weight: 700; color: var(--muted); }
+.seg button.on { background: var(--panel2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+.trow { display: flex; align-items: center; justify-content: space-between; margin: 6px 0 12px; }
+.trow .note { font-size: 12.5px; color: var(--dim); }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.tile { padding: 12px; }
+.tile .k { font-size: 12px; color: var(--muted); line-height: 1.3; min-height: 31px; }
+.tile .v { font-size: 22px; font-weight: 800; letter-spacing: -.02em; margin-top: 4px; }
+.tile .s { font-size: 12px; color: var(--dim); }
+.chart { padding: 14px 12px 8px; position: relative; }
+.ch-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 0 4px 6px; }
+.ch-head h3 { margin: 0; font-size: 15px; font-weight: 800; }
+.ch-head .s { font-size: 12px; color: var(--muted); }
+.legend { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); align-items: flex-end; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .sw { width: 8px; height: 12px; border-radius: 2px; background: var(--bar); }
+.legend .ln { width: 14px; height: 2px; border-radius: 2px; background: var(--accent); }
+.plot { height: 214px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.plot svg { display: block; overflow: visible; }
+.plot text { font-family: Manrope, sans-serif; font-size: 10.5px; fill: var(--dim); font-variant-numeric: tabular-nums; }
+.tip { position: absolute; top: 46px; pointer-events: none; background: #0d0b09; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px;
+  min-width: 128px; box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12px; color: var(--muted); }
+.tip .v { font-size: 17px; font-weight: 800; color: var(--text); }
+.tip .row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.tip .row b { color: var(--text); font-weight: 700; }
+.tip .row i { width: 12px; height: 2px; border-radius: 2px; background: var(--accent); }
+h2.h { font-size: 16px; font-weight: 800; margin: 22px 0 8px; }
+.table { padding: 4px 14px; }
+.tr { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: baseline; padding: 11px 0; border-top: 1px solid var(--grid); }
+.tr:first-child { border-top: 0; }
+.tr .p b { display: block; font-weight: 700; font-size: 14px; }
+.tr .p small, .tr .d { font-size: 12px; color: var(--muted); }
+.tr .a { font-weight: 800; text-align: right; }
+.tr .a small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); }
+.foot-note { font-size: 12px; color: var(--dim); margin: 8px 2px 0; }
+
+/* tab bar */
+.tabs { flex: none; position: relative; z-index: 5; display: flex; justify-content: center; gap: 8px;
+  padding: 8px 16px calc(var(--bot) + 8px); background: rgba(18,16,13,.88); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--grid); }
+.tabs button { flex: 1; max-width: 200px; border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font-size: 11.5px; font-weight: 700; color: var(--dim); padding: 4px 0; }
+.tabs button svg { width: 24px; height: 24px; }
+.tabs button.on { color: var(--text); }
+.tabs button.on svg { color: var(--accent2); }
+section.tab { display: none; }
+section.tab.on { display: block; animation: fade .25s var(--ease); }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } }
+
+/* bottom sheet */
+.back { position: absolute; inset: 0; z-index: 10; background: rgba(0,0,0,.55); opacity: 0; pointer-events: none; transition: opacity .25s; }
+.back.on { opacity: 1; pointer-events: auto; }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 11; max-width: 520px; margin: 0 auto; max-height: 92%; overflow-y: auto;
+  background: var(--panel); border-radius: 24px 24px 0 0; border: 1px solid var(--line); border-bottom: 0;
+  padding: 10px 18px calc(var(--bot) + 18px); transform: translateY(105%); visibility: hidden;
+  transition: transform .35s var(--ease), visibility 0s .35s; overscroll-behavior: contain; }
+.sheet.on { transform: none; visibility: visible; transition: transform .35s var(--ease); }
+.sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 12px; }
+.sheet h3 { margin: 0 0 12px; font-size: 19px; font-weight: 800; }
+.photo { height: 190px; border-radius: 16px; background: var(--panel2) center/cover no-repeat; position: relative; overflow: hidden; margin-bottom: 14px; }
+.photo .scan { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(18,16,13,.45); font-weight: 700; }
+.photo .scan::after { content: ""; position: absolute; left: 0; right: 0; height: 40%; top: -40%;
+  background: linear-gradient(180deg, transparent, rgba(238,139,63,.35), transparent); animation: sweep 1.6s var(--ease) infinite; }
+@keyframes sweep { to { top: 100%; } }
+@media (prefers-reduced-motion: reduce) { .photo .scan::after { animation: none; } }
+.photo .badge { position: absolute; left: 10px; bottom: 10px; padding: 4px 9px; border-radius: 999px; background: rgba(13,11,9,.8); font-size: 12px; font-weight: 700; }
+.field { display: block; margin-bottom: 12px; }
+.field > span { display: block; font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 5px; }
+.inp { width: 100%; height: 46px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); font-size: 16px; }
+.inp:focus { border-color: var(--accent); outline: none; }
+.two { display: grid; grid-template-columns: 112px 1fr; gap: 10px; }
+.two > .field, .two .inp { min-width: 0; }
+.items { border: 1px solid var(--line); border-radius: 14px; margin-bottom: 8px; }
+.items:empty { display: none; }
+.it { display: flex; align-items: flex-start; gap: 8px; padding: 8px 6px 8px 10px; border-top: 1px solid var(--grid); }
+.it:first-child { border-top: 0; }
+.it .nm { flex: 1; min-width: 0; }
+.it input { height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); padding: 0 10px; font-size: 16px; }
+.it input:focus { border-color: var(--accent); outline: none; }
+.it .nm input { width: 100%; font-weight: 600; }
+.it .nm small { display: block; font-size: 12px; color: var(--muted); padding: 3px 2px 0; }
+.it .kin { width: 72px; text-align: right; font-weight: 700; }
+.it .x { width: 32px; height: 38px; flex: none; border: 0; background: none; color: var(--dim); font-size: 20px; line-height: 1; padding: 0; }
+.link { border: 0; background: none; padding: 4px 0; color: var(--accent2); font-weight: 700; font-size: 14px; }
+.field > span small { font-weight: 500; color: var(--dim); }
+.ainote b { color: var(--text); }
+.wait { color: var(--muted); }
+/* How much did you eat: % slider, 10-200, starts at 100 */
+.amt { margin-bottom: 14px; }
+.amt .ahead { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.amt .ahead b { font-size: 18px; font-weight: 800; color: var(--text); }
+.amt input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 34px; margin: 2px 0 0; background: none; touch-action: pan-y; }
+.amt input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent) var(--p), #2d2822 var(--p)); }
+.amt input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 28px; height: 28px; margin-top: -11px; border-radius: 50%; background: var(--text); border: 0; box-shadow: 0 2px 8px rgba(0,0,0,.45); }
+.amt input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent) var(--p), #2d2822 var(--p)); }
+.amt input[type="range"]::-moz-range-thumb { width: 28px; height: 28px; border-radius: 50%; background: var(--text); border: 0; }
+.amt .ticks { position: relative; height: 22px; font-size: 11.5px; color: var(--dim); }
+.amt .ticks span, .amt .ticks button { position: absolute; top: 0; }
+.amt .ticks span:last-child { right: 0; }
+.amt .ticks button { transform: translateX(-50%); border: 0; background: none; padding: 0 6px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.ainote { font-size: 13px; color: var(--muted); background: var(--bg); border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+.recheck { display: flex; gap: 8px; margin-bottom: 14px; }
+.recheck .inp { flex: 1; height: 42px; font-size: 15px; }
+.recheck button { flex: none; height: 42px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel2); font-weight: 700; font-size: 14px; }
+.actions { display: flex; gap: 10px; margin-top: 6px; }
+.btn { flex: 1; height: 52px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel2); font-weight: 800; font-size: 16px; transition: transform .12s var(--ease); }
+.btn:active { transform: scale(.97); }
+.btn.primary { flex: 2; background: var(--accent); border-color: var(--accent); color: var(--ink); }
+.btn.primary:disabled { opacity: .45; }
+.btn.danger { color: var(--over); flex: 0 0 auto; padding: 0 16px; }
+.btn.danger.arm { background: var(--over); border-color: var(--over); color: #fff; }
+.err { color: #ffb4a8; font-size: 14px; margin: 4px 0 14px; }
+.hint { font-size: 12.5px; color: var(--dim); margin: -4px 0 12px; }
+.breakdown { font-size: 13px; color: var(--muted); margin: -2px 0 14px; }
+.breakdown div { display: flex; justify-content: space-between; padding: 3px 0; }
+
+.toast { position: absolute; left: 50%; bottom: calc(var(--bot) + 82px); z-index: 20; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  transition: opacity .25s, transform .3s var(--ease); background: #f4eee6; color: #1b1007; border-radius: 14px; padding: 10px 10px 10px 16px;
+  font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 14px; width: max-content; max-width: calc(100vw - 32px); box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.toast.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast.bad { background: #ffd9d3; }
+.toast button { border: 0; background: #1b1007; color: #f4eee6; border-radius: 10px; padding: 6px 12px; font-weight: 800; font-size: 13.5px; }
+.toast button:empty { display: none; }
+</style>
+</head>
+<body>
+<div class="app">
+<div class="scroll" id="scroll">
+<header class="top">
+  <h1 id="title">My day</h1>
+  <div class="r">
+    <span class="sync" id="sync"></span>
+    <button class="icon" id="gear" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button>
+  </div>
+</header>
+
+<main>
+<section class="tab on" id="tab-day">
+  <div class="daynav">
+    <button class="icon" id="prev" aria-label="Previous day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></button>
+    <div class="dayname"><b id="dayname"></b><span id="daysub"></span></div>
+    <button class="icon" id="next" aria-label="Next day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg></button>
+  </div>
+  <div class="card hero" id="hero"></div>
+  <div class="sechead">
+    <h2>Food</h2>
+    <div class="btns">
+      <button class="pill" id="typeBtn">Type</button>
+      <label class="pill cam"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Photo<input type="file" id="file" accept="image/*" hidden></label>
+    </div>
+  </div>
+  <div id="recentWrap"><div class="recent-label">Recent · tap to add</div><div class="recent" id="recent"></div><button class="link more" id="moreRecent" hidden></button></div>
+  <div class="recent-label today-label" id="todayLabel">Eaten today</div>
+  <div class="list" id="list"></div>
+</section>
+
+<section class="tab" id="tab-trends">
+  <div class="trow">
+    <div class="seg" id="range"><button data-r="30">1 month</button><button data-r="91" class="on">3 months</button></div>
+    <span class="note" id="goalNote"></span>
+  </div>
+  <div class="tiles" id="tiles"></div>
+  <div class="card chart">
+    <div class="ch-head">
+      <div><h3>Daily calories</h3><div class="s" id="chSub"></div></div>
+      <div class="legend"><span><i class="sw"></i>Each day</span><span><i class="ln"></i>7-day average</span></div>
+    </div>
+    <div class="plot" id="plot"></div>
+    <div class="tip" id="tip" hidden></div>
+  </div>
+  <h2 class="h">Weeks</h2>
+  <div class="card table" id="weeks"></div>
+  <h2 class="h">Months</h2>
+  <div class="card table" id="months"></div>
+  <p class="foot-note" id="trendNote"></p>
+</section>
+</main>
+</div>
+
+<nav class="tabs">
+  <button class="on" data-tab="day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"/></svg>My day</button>
+  <button data-tab="trends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V12M10 20V8M15 20v-6M20 20V5"/></svg>Trends</button>
+</nav>
+
+<div class="back" id="back"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Food"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button id="toastBtn"></button></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (n) => Math.round(n).toLocaleString('en-US');
+const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
+const HR = 3600e3;
+
+let S = { entries: [], settings: { goal: 2000, dayStart: 10 }, foods: [] };
+let view = null;   // "my day" being looked at (YYYY-MM-DD), null = the current one
+let range = 91;    // trends window in days
+let tab = 'day';
+const RECENT_ROWS = 5; let allRecent = false; // Recent list: first 5, "Show all" for the rest
+
+// Size the app to the real screen. A home-screen app on iOS can launch measuring the screen as if Safari's toolbar
+// were there; in standalone portrait the web view is the whole screen, so screen.height is the truth.
+function fit() {
+  const h = navigator.standalone && innerHeight >= innerWidth ? Math.max(innerHeight, screen.height) : innerHeight;
+  document.documentElement.style.setProperty('--appH', h + 'px');
+}
+fit();
+['resize', 'orientationchange', 'pageshow'].forEach((ev) => addEventListener(ev, fit));
+setTimeout(fit, 300); setTimeout(fit, 1200);
+
+/* ---------- time: "my day" runs from settings.dayStart (Manila) to the same hour the next day ---------- */
+// All times are stored as Manila wall time + "+08:00", so they sort as plain strings.
+const manilaIso = (d = new Date()) => new Date(d.getTime() + 8 * HR).toISOString().slice(0, 19) + '+08:00';
+const wall = (iso) => new Date(new Date(iso).getTime() + 8 * HR).toISOString(); // Manila wall time as a Z string
+const dayKey = (iso) => new Date(new Date(iso).getTime() + 8 * HR - S.settings.dayStart * HR).toISOString().slice(0, 10);
+const nowKey = () => dayKey(new Date().toISOString());
+const addDays = (k, n) => { const d = new Date(k + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayLabel = (k, o = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(k + 'T00:00:00Z').toLocaleDateString('en-US', { ...o, timeZone: 'UTC' });
+const hourLabel = (h) => (h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`);
+const timeLabel = (iso) => { const w = wall(iso); const h = +w.slice(11, 13); return `${h % 12 || 12}:${w.slice(14, 16)} ${h < 12 ? 'AM' : 'PM'}`; };
+const toInput = (iso) => wall(iso).slice(0, 16);           // datetime-local value, Manila wall time
+const fromInput = (v) => (v ? v + ':00+08:00' : null);
+const uid = () => Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+// New entries on the current day get "now"; on a past day, 7 PM of that day.
+const defaultTime = () => (!view || view === nowKey() ? manilaIso() : `${view}T19:00:00+08:00`);
+
+function totals() { const m = new Map(); for (const e of S.entries) { const k = dayKey(e.time); m.set(k, (m.get(k) || 0) + e.kcal); } return m; }
+// Recent foods = newest entry per food name (one tap adds it again), newest first. Saved foods (Foods tab) always
+// show, ordered by when last eaten or saved; other foods fill up to 24.
+function recents() {
+  const saved = new Set((S.foods || []).map((f) => f.food.trim().toLowerCase()));
+  const seen = new Map();
+  let others = 0;
+  for (const e of [...S.entries, ...(S.foods || [])].sort((a, b) => (a.time < b.time ? 1 : -1))) {
+    const k = e.food.trim().toLowerCase();
+    if (seen.has(k)) continue;
+    if (!saved.has(k)) { if (others >= 24) continue; others++; }
+    seen.set(k, e);
+  }
+  return [...seen.values()];
+}
+
+/* ---------- server ---------- */
+async function api(action, p = {}) {
+  const r = await fetch('/api/cal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, p }) });
+  if (r.status === 401) { location.replace('/pin.html'); throw new Error('Signed out'); }
+  const j = await r.json().catch(() => ({}));
+  return j.r || { ok: false, error: `Server error ${r.status}. Try again.` };
+}
+function apply(r) { S = { entries: r.entries, settings: r.settings, foods: r.foods || [] }; try { localStorage.setItem('cal_state', JSON.stringify(S)); } catch {} render(); }
+// Writes run one at a time. The screen changes at once; a server reply only replaces it when nothing else is waiting,
+// so a slow reply can never undo a newer tap.
+let queue = Promise.resolve(), inflight = 0, failed = false;
+function send(action, p) {
+  inflight++; setSync('Saving…');
+  return (queue = queue.then(async () => {
+    try {
+      const r = await api(action, p);
+      if (!r.ok) throw new Error(r.error || 'Could not save.');
+      if (inflight === 1) apply(r);
+      return true;
+    } catch (e) { failed = true; toast(e.message === 'Failed to fetch' ? 'No connection. Not saved.' : e.message, true); return false; }
+    finally {
+      inflight--;
+      if (!inflight) { if (failed) { failed = false; setSync(''); load(); } else setSync('Saved'); }
+    }
+  }));
+}
+async function load() {
+  if (inflight) return;
+  try { const r = await api('state'); if (r.ok && !inflight) apply(r); else if (!r.ok) toast(r.error, true); }
+  catch (e) { if (e.message !== 'Signed out') toast('Offline. Showing the last saved data.', true); }
+}
+let syncT;
+function setSync(t) { const el = $('#sync'); clearTimeout(syncT); el.textContent = t; el.classList.toggle('on', !!t); if (t === 'Saved') syncT = setTimeout(() => el.classList.remove('on'), 1400); }
+
+/* ---------- render: my day ---------- */
+function render() { renderDay(); if (tab === 'trends') renderTrends(); }
+
+function renderDay() {
+  const cur = nowKey(), k = view || cur, isNow = k === cur;
+  const { goal, dayStart } = S.settings;
+  $('#dayname').textContent = dayLabel(k);
+  const rel = isNow ? 'Today' : k === addDays(cur, -1) ? 'Yesterday' : '';
+  $('#daysub').innerHTML = `${rel ? rel + ' · ' : ''}${hourLabel(dayStart)} to ${hourLabel(dayStart)}${isNow ? '' : '<button id="today">Back to today</button>'}`;
+  $('#next').disabled = isNow;
+
+  const list = S.entries.filter((e) => dayKey(e.time) === k).sort((a, b) => (a.time < b.time ? -1 : 1));
+  const eaten = list.reduce((a, e) => a + e.kcal, 0), left = goal - eaten;
+  const C = 2 * Math.PI * 52, frac = Math.min(1, eaten / goal), over = Math.min(1, Math.max(0, (eaten - goal) / goal));
+  $('#hero').innerHTML = `
+    <svg class="ring" viewBox="0 0 128 128" role="img" aria-label="${fmt(eaten)} of ${fmt(goal)} kcal">
+      <circle class="track" cx="64" cy="64" r="52"/>
+      <circle class="fill" cx="64" cy="64" r="52" stroke-dasharray="${frac * C} ${C}" transform="rotate(-90 64 64)"/>
+      ${over > 0 ? `<circle class="over" cx="64" cy="64" r="52" stroke-dasharray="${over * C} ${C}" transform="rotate(-90 64 64)"/>` : ''}
+      <text x="64" y="64" class="num">${fmt(eaten)}</text><text x="64" y="81" class="pct">${Math.round((eaten / goal) * 100)}%</text>
+    </svg>
+    <div>
+      <div class="big num">${fmt(Math.abs(left))}</div>
+      <div class="lbl">${left >= 0 ? 'kcal left' : '<i></i>kcal over goal'}</div>
+      <div class="eaten"><b class="num">${fmt(eaten)}</b> eaten · goal <b class="num">${fmt(goal)}</b></div>
+    </div>`;
+
+  const rec = recents();
+  $('#recentWrap').hidden = !rec.length;
+  const shown = allRecent ? rec : rec.slice(0, RECENT_ROWS);
+  $('#recent').innerHTML = shown.map((e, i) => `<button class="rc" data-i="${i}" aria-label="Add ${esc(e.food)}, ${fmt(e.kcal)} kcal">
+    <span class="em">${esc(e.emoji || '🍽️')}</span><b>${esc(e.food)}</b><small class="num">${fmt(e.kcal)} kcal</small>
+    <span class="plus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span></button>`).join('');
+  $('#moreRecent').hidden = rec.length <= RECENT_ROWS;
+  $('#moreRecent').textContent = allRecent ? 'Show less' : `Show all ${rec.length}`;
+  $('#todayLabel').textContent = isNow ? 'Eaten today' : 'Eaten this day';
+  $('#list').innerHTML = list.map((e) => `
+    <button class="entry ${e._pending ? 'pending' : ''}" data-id="${esc(e.id)}">
+      <span class="em">${esc(e.emoji || '🍽️')}</span>
+      <span class="mid"><b>${esc(e.food)}</b><small>${timeLabel(e.time)}${e.portion ? ' · ' + esc(e.portion) : ''}</small></span>
+      <span class="kc num">${fmt(e.kcal)}<span>kcal</span></span>
+    </button>`).join('') || `<div class="empty">${isNow ? 'Nothing yet today. Snap your food with <b>Photo</b>, or tap a recent one.' : 'Nothing logged this day.'}</div>`;
+}
+
+/* ---------- render: trends ---------- */
+function stats() {
+  const cur = nowKey(), m = totals(), goal = S.settings.goal;
+  // Only finished days count toward averages (today is still going).
+  const done = (k) => k < cur && m.has(k);
+  const days = [];
+  for (let i = range - 1; i >= 0; i--) {
+    const k = addDays(cur, -i);
+    let s = 0, n = 0;
+    for (let j = 0; j < 7; j++) { const kk = addDays(k, -j); if (done(kk)) { s += m.get(kk); n++; } }
+    days.push({ k, v: m.has(k) ? m.get(k) : null, ma: n ? s / n : null, today: k === cur });
+  }
+  const span = (from) => { let s = 0, n = 0, under = 0; for (let i = 1; i <= from; i++) { const k = addDays(cur, -i); if (done(k)) { s += m.get(k); n++; if (m.get(k) <= goal) under++; } } return { avg: n ? s / n : null, n, under }; };
+  return { cur, m, goal, days, done, last7: span(7), all: span(range - 1) };
+}
+
+function renderTrends() {
+  const T = stats(), { goal } = T;
+  $('#goalNote').textContent = `Goal ${fmt(goal)} kcal`;
+  $('#chSub').textContent = `${dayLabel(T.days[0].k, { month: 'short', day: 'numeric' })} to today`;
+  const tile = (k, v, s) => `<div class="card tile"><div class="k">${k}</div><div class="v num">${v}</div><div class="s">${s}</div></div>`;
+  const vs = (a) => (a == null ? '' : a <= goal ? `${fmt(goal - a)} under goal` : `${fmt(a - goal)} over goal`);
+  $('#tiles').innerHTML =
+    tile('Average a day, last 7 days', T.last7.avg == null ? '–' : fmt(T.last7.avg), T.last7.avg == null ? 'No full days yet' : vs(T.last7.avg)) +
+    tile(`Average a day, last ${range > 40 ? '3 months' : 'month'}`, T.all.avg == null ? '–' : fmt(T.all.avg), `${T.all.n} day${T.all.n === 1 ? '' : 's'} logged`) +
+    tile('Days at or under goal', T.all.n ? `${T.all.under}/${T.all.n}` : '–', T.all.n ? `${Math.round((T.all.under / T.all.n) * 100)}% of logged days` : 'Log a full day first');
+  drawChart(T);
+
+  // Weeks (Monday start) and months, newest first, finished days only.
+  const groups = (keyOf, label, max) => {
+    const g = new Map();
+    for (const [k, v] of T.m) { if (!T.done(k)) continue; const id = keyOf(k); const x = g.get(id) || { s: 0, n: 0, under: 0, id }; x.s += v; x.n++; if (v <= goal) x.under++; g.set(id, x); }
+    return [...g.values()].sort((a, b) => (a.id < b.id ? 1 : -1)).slice(0, max).map((x) => {
+      const avg = x.s / x.n;
+      return `<div class="tr"><div class="p"><b>${label(x.id)}</b><small>${x.n} day${x.n === 1 ? '' : 's'} logged · ${x.under} at or under goal</small></div>
+        <div class="d num">${fmt(x.s)} total</div><div class="a num">${fmt(avg)}<small>a day</small></div></div>`;
+    }).join('');
+  };
+  const monday = (k) => { const d = new Date(k + 'T00:00:00Z'); return addDays(k, -((d.getUTCDay() + 6) % 7)); };
+  $('#weeks').innerHTML = groups(monday, (id) => `${dayLabel(id, { month: 'short', day: 'numeric' })} to ${dayLabel(addDays(id, 6), { month: 'short', day: 'numeric' })}`, 14)
+    || '<div class="tr"><div class="p"><small>No finished days yet.</small></div></div>';
+  $('#months').innerHTML = groups((k) => k.slice(0, 7), (id) => new Date(id + '-01T00:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }), 12)
+    || '<div class="tr"><div class="p"><small>No finished days yet.</small></div></div>';
+  $('#trendNote').textContent = `A day runs ${hourLabel(S.settings.dayStart)} to ${hourLabel(S.settings.dayStart)}. Averages skip days with nothing logged and today (still going).`;
+}
+
+/* chart: daily bars + 7-day average line + goal line, one y axis */
+let CH = null;
+function drawChart(T) {
+  const el = $('#plot'), W = el.clientWidth || 340, H = 214, pl = 30, pr = 6, pt = 10, pb = 22, iw = W - pl - pr, ih = H - pt - pb;
+  const { days, goal } = T;
+  const max = Math.max(goal, ...days.map((d) => d.v || 0), ...days.map((d) => d.ma || 0));
+  const step = max > 4500 ? 1000 : 500, top = Math.ceil((max * 1.08) / step) * step;
+  const y = (v) => pt + ih - (v / top) * ih, slot = iw / days.length, x = (i) => pl + i * slot + slot / 2;
+  const bw = Math.max(1.5, Math.min(24, slot - (slot > 6 ? 2 : 1))), r = Math.min(4, bw / 2);
+  const ticks = []; for (let v = 0; v <= top; v += top / step > 6 ? step * 2 : step) ticks.push(v);
+  const kfmt = (v) => (v === 0 ? '0' : v % 1000 === 0 ? v / 1000 + 'K' : (v / 1000).toFixed(1) + 'K');
+  // Bar with rounded data end, square at the baseline.
+  const bar = (cx, v) => { const x0 = cx - bw / 2, y0 = y(v), h = Math.max(0, y(0) - y0), rr = Math.min(r, h);
+    return `M${x0},${y(0)}V${y0 + rr}Q${x0},${y0} ${x0 + rr},${y0}H${x0 + bw - rr}Q${x0 + bw},${y0} ${x0 + bw},${y0 + rr}V${y(0)}Z`; };
+  let line = '', pen = false;
+  days.forEach((d, i) => { if (d.ma == null || d.today) { pen = false; return; } line += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(d.ma).toFixed(1)}`; pen = true; });
+  // X labels: 1 month = every 7th day ("Sep 15, 22, 29, Oct 6"); 3 months = each month start.
+  const short = days.length < 40;
+  const months = days.map((d, i) => {
+    if (short ? i % 7 !== 0 : !d.k.endsWith('-01')) return '';
+    const sameMonth = i >= 7 && days[i - 7].k.slice(5, 7) === d.k.slice(5, 7);
+    const txt = short ? dayLabel(d.k, sameMonth ? { day: 'numeric' } : { month: 'short', day: 'numeric' }) : dayLabel(d.k, { month: 'short' });
+    return `<text x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : 'middle'}">${txt}</text>`;
+  }).join('');
+  const gy = y(goal), lastMa = [...days].reverse().find((d) => d.ma != null && !d.today);
+  el.innerHTML = `<svg width="${W}" height="${H}" role="img" aria-label="Daily calories with 7-day average and goal line">
+    ${ticks.map((v) => `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/><text x="${pl - 6}" y="${y(v) + 3.5}" text-anchor="end">${kfmt(v)}</text>`).join('')}
+    <g>${days.map((d, i) => (d.v ? `<path data-i="${i}" d="${bar(x(i), d.v)}" fill="var(--bar)" opacity="${d.today ? 0.45 : 1}"/>` : '')).join('')}</g>
+    <line x1="${pl}" x2="${W - pr}" y1="${gy}" y2="${gy}" stroke="var(--muted)" stroke-width="1"/>
+    <text x="${pl + 4}" y="${gy - 5}" style="fill:var(--muted);font-weight:700;paint-order:stroke;stroke:var(--panel);stroke-width:4px">Goal ${fmt(goal)}</text>
+    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${lastMa ? `<circle cx="${x(days.indexOf(lastMa))}" cy="${y(lastMa.ma)}" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2"/>` : ''}
+    ${months}
+    <line id="xh" y1="${pt}" y2="${y(0)}" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>
+    <circle id="xd" r="4" fill="var(--accent)" stroke="var(--panel)" stroke-width="2" visibility="hidden"/>
+  </svg>`;
+  CH = { days, x, y, pl, slot, W };
+}
+// Crosshair + tooltip: snaps to the nearest day; drag along the chart on the phone.
+function chartAt(clientX) {
+  if (!CH) return;
+  const el = $('#plot'), box = el.getBoundingClientRect(), i = Math.max(0, Math.min(CH.days.length - 1, Math.floor((clientX - box.left - CH.pl) / CH.slot)));
+  const d = CH.days[i], cx = CH.x(i), xh = el.querySelector('#xh'), xd = el.querySelector('#xd');
+  xh.setAttribute('x1', cx); xh.setAttribute('x2', cx); xh.setAttribute('visibility', 'visible');
+  if (d.ma != null && !d.today) { xd.setAttribute('cx', cx); xd.setAttribute('cy', CH.y(d.ma)); xd.setAttribute('visibility', 'visible'); } else xd.setAttribute('visibility', 'hidden');
+  el.querySelectorAll('path[data-i]').forEach((p) => p.setAttribute('fill', +p.dataset.i === i ? '#62aee0' : 'var(--bar)'));
+  const tip = $('#tip');
+  tip.replaceChildren();
+  const v = document.createElement('div'); v.className = 'v num'; v.textContent = d.v ? `${fmt(d.v)} kcal${d.today ? ' so far' : ''}` : 'Nothing logged';
+  const k = document.createElement('div'); k.textContent = dayLabel(d.k);
+  tip.append(v, k);
+  if (d.ma != null) { const row = document.createElement('div'); row.className = 'row'; const i2 = document.createElement('i'); const b = document.createElement('b'); b.className = 'num'; b.textContent = fmt(d.ma); row.append(i2, '7-day avg ', b); tip.append(row); }
+  tip.hidden = false;
+  const tw = tip.offsetWidth, left = cx + 12 + tw > CH.W ? cx - tw - 6 : cx + 18;
+  tip.style.left = Math.max(6, left) + 'px';
+}
+let tipT;
+function chartOff() { clearTimeout(tipT); tipT = setTimeout(() => { $('#tip').hidden = true; const el = $('#plot'); el.querySelector('#xh')?.setAttribute('visibility', 'hidden'); el.querySelector('#xd')?.setAttribute('visibility', 'hidden'); el.querySelectorAll('path[data-i]').forEach((p) => p.setAttribute('fill', 'var(--bar)')); }, 1800); }
+$('#plot').addEventListener('pointerdown', (e) => { clearTimeout(tipT); chartAt(e.clientX); });
+$('#plot').addEventListener('pointermove', (e) => { clearTimeout(tipT); chartAt(e.clientX); });
+['pointerup', 'pointerleave', 'pointercancel'].forEach((t) => $('#plot').addEventListener(t, chartOff));
+
+/* ---------- adding food ---------- */
+function addEntries(list, msg) {
+  const fresh = list.map((e) => ({ ...e, id: uid() }));
+  S.entries.push(...fresh);
+  render();
+  send('add', { entries: fresh });
+  const ids = new Set(fresh.map((e) => e.id));
+  toast(msg, false, 'Undo', () => { S.entries = S.entries.filter((e) => !ids.has(e.id)); render(); fresh.forEach((e) => send('remove', { id: e.id })); });
+}
+$('#moreRecent').addEventListener('click', () => { allRecent = !allRecent; renderDay(); });
+// A second tap on the same food within 1 s is a double-fire, not a second serving (2026-10-15: two burritos 87 ms apart).
+let lastTap = { k: '', t: 0 };
+$('#recent').addEventListener('click', (e) => {
+  const b = e.target.closest('.rc'); if (!b) return;
+  const r = recents()[+b.dataset.i]; if (!r) return;
+  const k = r.food.trim().toLowerCase(), now = Date.now();
+  if (k === lastTap.k && now - lastTap.t < 1000) return;
+  lastTap = { k, t: now };
+  b.classList.add('added'); setTimeout(() => b.classList.remove('added'), 600);
+  addEntries([{ time: defaultTime(), food: r.food, kcal: r.kcal, emoji: r.emoji, portion: r.portion, items: r.items || [], source: 'recent' }], `Added ${r.food} · ${fmt(r.kcal)} kcal`);
+});
+
+// Shrink the photo before upload (phone photos are several MB; the AI only needs ~1280 px).
+function shrink(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => { const k = Math.min(1, 1280 / Math.max(img.width, img.height)); const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.82)); };
+    img.onerror = () => rej(new Error('Could not open that photo.')); img.src = URL.createObjectURL(file);
+  });
+}
+
+/* ---------- the food form: ONE form for typing, photos and edits ----------
+   A photo only fills the form in: the AI's answer is a suggestion. Every field stays editable, and a field you've
+   touched is never overwritten by the AI. Calories = breakdown total x how much you ate, until you type your own. */
+let F = null;
+const AMT = { min: 10, max: 200 }; // "How much did you eat?" slider, in %
+const amtFill = (pct) => `${((pct - AMT.min) / (AMT.max - AMT.min)) * 100}%`;
+const autoKcal = () => Math.round(F.items.reduce((a, i) => a + (Number(i.kcal) || 0), 0) * F.mult);
+$('#file').addEventListener('change', async (e) => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  openForm(null, { url: URL.createObjectURL(f), status: 'reading', note: '' });
+  const P = F.photo;
+  try { P.data = await shrink(f); } catch (err) { P.status = 'bad'; P.error = err.message; return paintAi(); }
+  runScan(false);
+});
+// What the AI gets about a past food: name + calories for one full serving (an entry saved at "55% portion" is scaled
+// back up), so the same food scans to the same number every time (2026-10-15: Daykey donut gave 260 then 215).
+function knownLine(e) {
+  const m = /^(\d+)% portion$/.exec(e.portion || '');
+  const full = m && +m[1] ? Math.round(e.kcal * 100 / +m[1]) : e.kcal;
+  return `${e.food}: ${full} kcal${e.portion && !m ? ` (${e.portion})` : ''}`;
+}
+async function runScan(again) {
+  const f = F, P = f.photo; P.status = 'reading'; P.error = ''; paintAi();
+  let r;
+  try { r = await api('scan', { image: P.data, mediaType: 'image/jpeg', note: P.note, known: recents().map(knownLine) }); }
+  catch { r = { ok: false, error: 'Could not reach the server. Type it in, or try again.' }; }
+  if (F !== f) return; // form closed meanwhile
+  if (!r.ok) { P.status = 'bad'; P.error = r.error; return paintAi(); }
+  if (!r.items.length) { P.status = 'bad'; P.error = r.note || 'No food found in this photo. Type it in instead.'; return paintAi(); }
+  P.status = 'done'; P.res = r;
+  if (!f.nameTouched) { f.name = r.title; $('#fFood').value = r.title; }
+  f.emoji = r.emoji;
+  f.items = r.items.map((i) => ({ name: i.name, portion: [i.portion, i.grams ? `~${i.grams} g` : ''].filter(Boolean).join(' · '), kcal: i.kcal }));
+  f.mult = 1;
+  if (again) f.kcalTouched = false; // asked for a re-check: take the new total
+  paintAi(); paintItems(); paintTotal();
+}
+
+function openForm(entry, photo = null) {
+  const items = (entry?.items || []).map((i) => ({ ...i }));
+  F = entry
+    ? { mode: 'edit', entry, name: entry.food, emoji: entry.emoji, time: entry.time, items, mult: 1, nameTouched: true, portion: entry.portion,
+        kcalTouched: !(items.length && items.reduce((a, i) => a + i.kcal, 0) === entry.kcal), photo: null }
+    : { mode: 'new', name: '', emoji: '', time: defaultTime(), items: [], mult: 1, nameTouched: false, kcalTouched: false, portion: '', photo };
+  sheet(`<h3>${entry ? 'Edit food' : 'Add food'}</h3>
+    ${photo ? '<div class="photo" id="fPhoto"></div><div id="fAi"></div>' : ''}
+    <label class="field"><span>What</span><input class="inp" id="fFood" list="foods" value="${esc(F.name)}" maxlength="80" placeholder="${photo ? 'AI is reading the photo…' : 'e.g. Pandesal, 2 pcs'}" autocomplete="off"></label>
+    <datalist id="foods">${recents().map((r) => `<option value="${esc(r.food)}">`).join('')}</datalist>
+    <div class="two"><label class="field"><span>Calories</span><input class="inp num" id="fKcal" inputmode="numeric" value="${entry ? entry.kcal : ''}" placeholder="kcal"></label>
+    <label class="field"><span>When</span><input class="inp" type="datetime-local" id="fTime" value="${toInput(F.time)}"></label></div>
+    <div id="fHint"></div>
+    <div class="field"><span>Breakdown <small>(optional)</small></span><div class="items" id="fItems"></div><button class="link" id="fAddItem">+ Add item</button></div>
+    <div id="fMult"></div>
+    ${photo ? '<div class="recheck"><input class="inp" id="fNote" placeholder="Tell the AI more, e.g. 2 cups rice"><button id="fRe">Re-check</button></div>' : ''}
+    <div class="actions">${entry ? '<button class="btn danger" id="fDel">Remove</button>' : ''}<button class="btn" data-close>Cancel</button><button class="btn primary" id="fSave">${entry ? 'Save' : 'Add'}</button></div>`);
+  paintAi(); paintItems(); paintTotal();
+  openSheet();
+  if (!entry && !photo) setTimeout(() => $('#fFood')?.focus(), 350);
+}
+function paintAi() {
+  const P = F?.photo; if (!P) return;
+  $('#fPhoto').style.backgroundImage = `url('${P.url}')`;
+  $('#fPhoto').innerHTML = P.status === 'reading' ? '<div class="scan">Reading your plate…</div>' : '';
+  $('#fAi').innerHTML = P.status === 'reading' ? '<div class="ainote wait">The AI will fill this in. You can start typing meanwhile.</div>'
+    : P.status === 'bad' ? `<div class="err">${esc(P.error)}</div>`
+    : `<div class="ainote"><b>AI suggestion</b> · ${esc(P.res.confidence)} confidence. Change anything that's off.${P.res.note ? '<br>' + esc(P.res.note) : ''}</div>`;
+  const re = $('#fRe'); if (re) { re.disabled = P.status === 'reading' || !P.data; re.textContent = P.status === 'bad' ? 'Try again' : 'Re-check'; }
+}
+function paintItems() {
+  $('#fItems').innerHTML = F.items.map((i, n) => `<div class="it" data-n="${n}">
+    <div class="nm"><input class="iname" value="${esc(i.name)}" placeholder="Item" aria-label="Item name">${i.portion ? `<small>${esc(i.portion)}</small>` : ''}</div>
+    <input class="kin num" inputmode="numeric" value="${esc(i.kcal)}" placeholder="kcal" aria-label="kcal">
+    <button class="x" aria-label="Remove item">×</button></div>`).join('');
+  const pct = Math.round(F.mult * 100);
+  $('#fMult').innerHTML = F.items.length ? `<div class="amt"><div class="ahead"><span>How much did you eat?</span><b class="num" id="fPct">${pct}%</b></div>
+    <input type="range" id="fAmt" min="${AMT.min}" max="${AMT.max}" step="5" value="${pct}" style="--p:${amtFill(pct)}" aria-label="How much did you eat, in percent">
+    <div class="ticks"><span>${AMT.min}%</span><button id="fFull" style="left:${amtFill(100)}">100%</button><span>${AMT.max}%</span></div></div>` : '';
+}
+// Slider moved (or "100%" tapped): calories follow the breakdown again.
+function setAmt(pct) {
+  F.mult = pct / 100; F.kcalTouched = false;
+  const s = $('#fAmt'); if (s) { s.value = pct; s.style.setProperty('--p', amtFill(pct)); }
+  $('#fPct').textContent = `${pct}%`;
+  paintTotal();
+}
+function paintTotal() {
+  if (!F.kcalTouched && F.items.length) $('#fKcal').value = autoKcal();
+  const sum = autoKcal(), typed = Math.round(Number($('#fKcal').value.replace(/[^\d.]/g, '')));
+  $('#fHint').innerHTML = F.kcalTouched && F.items.length && typed !== sum
+    ? `<p class="hint">You typed the calories. The breakdown adds up to ${fmt(sum)}. <button class="link" id="fUseSum">Use ${fmt(sum)}</button></p>` : '';
+}
+function saveForm() {
+  const food = $('#fFood').value.trim(), raw = $('#fKcal').value.replace(/[^\d.]/g, ''), kcal = Math.round(Number(raw)), time = fromInput($('#fTime').value);
+  if (!food) return toast('Add a name', true);
+  if (raw === '' || !(kcal >= 0)) return toast('Add the calories', true);
+  if (!time) return toast('Pick a time', true);
+  const items = F.items.filter((i) => i.name.trim() || Number(i.kcal))
+    .map((i) => ({ name: i.name.trim() || 'Item', portion: i.portion || '', kcal: Math.round((Number(i.kcal) || 0) * F.mult) }));
+  const portion = F.mult !== 1 ? `${Math.round(F.mult * 100)}% portion` : F.portion;
+  if (F.mode === 'edit') {
+    const e = { ...F.entry, food, kcal, time, items, portion };
+    S.entries = S.entries.map((x) => (x.id === e.id ? e : x));
+    closeSheet(); render(); send('update', { entry: e });
+  } else {
+    const e = { time, food, kcal, emoji: F.emoji, portion, items, source: F.photo ? 'photo' : F.fromRecent ? 'recent' : 'typed' };
+    closeSheet(); addEntries([e], `Added ${food} · ${fmt(kcal)} kcal`);
+  }
+}
+
+
+/* settings */
+function openSettings() {
+  const { goal, dayStart } = S.settings;
+  sheet(`<h3>Settings</h3>
+    <label class="field"><span>Daily goal (kcal)</span><input class="inp num" id="gGoal" inputmode="numeric" value="${goal}"></label>
+    <label class="field"><span>My day starts at</span><select class="inp" id="gStart">${Array.from({ length: 15 }, (_, h) => `<option value="${h}" ${h === dayStart ? 'selected' : ''}>${hourLabel(h)}</option>`).join('')}</select></label>
+    <p class="hint">Food logged before this hour counts for the day before. Pick a time you're always asleep.</p>
+    <div class="actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="gSave">Save</button></div>`);
+  openSheet();
+}
+
+/* ---------- sheet + toast ---------- */
+function sheet(html) { $('#sheet').innerHTML = '<div class="grab"></div>' + html; }
+function openSheet() { $('#sheet').classList.add('on'); $('#back').classList.add('on'); document.body.style.overflow = 'hidden'; }
+function closeSheet() {
+  $('#sheet').classList.remove('on'); $('#back').classList.remove('on'); document.body.style.overflow = '';
+  if (F?.photo) URL.revokeObjectURL(F.photo.url); F = null;
+}
+$('#back').addEventListener('click', closeSheet);
+$('#sheet').addEventListener('click', (e) => {
+  const t = e.target;
+  if (t.closest('[data-close]')) return closeSheet();
+  if (F) {
+    const it = t.closest('.it');
+    if (t.closest('.x') && it) { F.items.splice(+it.dataset.n, 1); paintItems(); return paintTotal(); }
+    if (t.id === 'fAddItem') { F.items.push({ name: '', portion: '', kcal: '' }); paintItems(); paintTotal(); return $('#fItems .it:last-child .iname')?.focus(); }
+    if (t.id === 'fFull') return setAmt(100);
+    if (t.id === 'fUseSum') { F.kcalTouched = false; return paintTotal(); }
+    if (t.id === 'fRe') { F.photo.note = $('#fNote').value.trim(); return runScan(true); }
+    if (t.id === 'fSave') return saveForm();
+    if (t.id === 'fDel') {
+      if (!t.classList.contains('arm')) { t.classList.add('arm'); t.textContent = 'Tap again'; setTimeout(() => { t.classList.remove('arm'); t.textContent = 'Remove'; }, 3000); return; }
+      const old = F.entry; S.entries = S.entries.filter((x) => x.id !== old.id); closeSheet(); render(); send('remove', { id: old.id });
+      return toast(`Removed ${old.food}`, false, 'Undo', () => { S.entries.push(old); render(); send('add', { entries: [old] }); });
+    }
+  }
+  if (t.id === 'gSave') {
+    const goal = Math.round(Number($('#gGoal').value.replace(/[^\d]/g, ''))), dayStart = +$('#gStart').value;
+    if (!(goal >= 800 && goal <= 6000)) return toast('Goal should be 800 to 6,000 kcal', true);
+    S.settings = { goal, dayStart }; closeSheet(); view = null; render(); send('settings', { goal, dayStart });
+  }
+});
+$('#sheet').addEventListener('input', (e) => {
+  if (!F) return;
+  const t = e.target, it = t.closest('.it');
+  if (it && t.classList.contains('iname')) F.items[+it.dataset.n].name = t.value;
+  else if (it && t.classList.contains('kin')) { F.items[+it.dataset.n].kcal = t.value.replace(/[^\d]/g, ''); paintTotal(); }
+  else if (t.id === 'fKcal') { F.kcalTouched = true; paintTotal(); }
+  else if (t.id === 'fAmt') setAmt(+t.value);
+  else if (t.id === 'fFood') {
+    F.nameTouched = true;
+    // Typed form: picking a recent food fills in its calories + breakdown (still editable).
+    const r = !F.photo && F.mode === 'new' && recents().find((x) => x.food.toLowerCase() === t.value.trim().toLowerCase());
+    if (r) {
+      Object.assign(F, { emoji: r.emoji, portion: r.portion, fromRecent: true, mult: 1, items: (r.items || []).map((i) => ({ ...i })) });
+      F.kcalTouched = !(F.items.length && autoKcal() === r.kcal);
+      $('#fKcal').value = r.kcal; paintItems(); paintTotal();
+    }
+  }
+});
+
+let toastT, toastFn;
+function toast(msg, bad = false, label = '', fn = null) {
+  const el = $('#toast'); $('#toastMsg').textContent = msg; $('#toastBtn').textContent = label; toastFn = fn;
+  el.classList.toggle('bad', bad); el.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), label ? 4500 : 2600);
+}
+$('#toastBtn').addEventListener('click', () => { const f = toastFn; toastFn = null; $('#toast').classList.remove('on'); if (f) f(); });
+
+/* ---------- navigation ---------- */
+$('#prev').addEventListener('click', () => { view = addDays(view || nowKey(), -1); renderDay(); });
+$('#next').addEventListener('click', () => { const n = addDays(view || nowKey(), 1); view = n >= nowKey() ? null : n; renderDay(); });
+$('#daysub').addEventListener('click', (e) => { if (e.target.id === 'today') { view = null; renderDay(); } });
+$('#typeBtn').addEventListener('click', () => openForm());
+$('#gear').addEventListener('click', openSettings);
+$('#list').addEventListener('click', (e) => { const b = e.target.closest('.entry'); if (b) openForm(S.entries.find((x) => x.id === b.dataset.id)); });
+document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('section.tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab));
+  $('#title').textContent = tab === 'day' ? 'My day' : 'Trends';
+  $('#scroll').scrollTo(0, 0); render();
+}));
+$('#range').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; range = +b.dataset.r; $('#range').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); renderTrends(); });
+addEventListener('resize', () => { if (tab === 'trends') renderTrends(); });
+// Home-screen apps stay open in the background: refresh when it comes back (also rolls over to a new day).
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { fit(); render(); load(); } });
+
+try { const c = JSON.parse(localStorage.getItem('cal_state') || 'null'); if (c && c.settings) S = c; } catch {}
+render();
+load();
+</script>
+</body>
+</html>

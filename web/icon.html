@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- App icon, 512 px design (preview.mjs renders 32/180/192/512). A plate seen from above whose rim is the day's
+     progress ring, fork beside it. iOS rounds the corners itself, so the square is full bleed. -->
+<style>
+html, body { margin: 0; width: 512px; height: 512px; overflow: hidden; }
+body { background: radial-gradient(120% 120% at 30% 20%, #2a2119 0%, #12100d 62%); }
+svg { display: block; }
+</style></head>
+<body>
+<svg width="512" height="512" viewBox="0 0 512 512">
+  <!-- plate -->
+  <circle cx="276" cy="256" r="150" fill="#1f1b17"/>
+  <circle cx="276" cy="256" r="104" fill="#f4eee6"/>
+  <circle cx="276" cy="256" r="104" fill="none" stroke="#e3d9cb" stroke-width="6"/>
+  <!-- progress ring on the rim -->
+  <circle cx="276" cy="256" r="128" fill="none" stroke="#3a3129" stroke-width="22"/>
+  <circle cx="276" cy="256" r="128" fill="none" stroke="#ee8b3f" stroke-width="22" stroke-linecap="round"
+    stroke-dasharray="563 805" transform="rotate(-90 276 256)"/>
+  <!-- fork -->
+  <g fill="#f4eee6">
+    <rect x="76" y="118" width="12" height="96" rx="6"/>
+    <rect x="98" y="118" width="12" height="96" rx="6"/>
+    <rect x="120" y="118" width="12" height="96" rx="6"/>
+    <path d="M70 196h68v18c0 20-14 34-34 34s-34-14-34-34z"/>
+    <rect x="93" y="236" width="22" height="160" rx="11"/>
+  </g>
+</svg>
+</body></html>

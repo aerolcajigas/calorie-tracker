@@ -1,0 +1,520 @@
+{
+  "name": "Calories / API",
+  "nodes": [
+    {
+      "id": "03984eba-8906-4bc9-aa98-d1894766cd23",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calories-api",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "YOUR_WEBHOOK_ID"
+    },
+    {
+      "id": "98729393-b9ce-4ad0-9ab8-4df973a97f4c",
+      "name": "Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Gate: checks the nginx key, handles the PIN login (5 wrong tries = 15 min lock), routes everything else.\n// __API_SECRET__, __DASH_TOKEN__ and __PIN__ are filled in by build.mjs.\nconst KEY = \"***\", TOKEN = \"***\", PIN = \"***\";\nconst req = $input.first().json;\nconst h = req.headers || {}, body = req.body || {};\nconst action = String(body.action || ''), p = body.p || {};\nconst out = (o) => [{ json: o }];\n\nif (h['x-cal-key'] !== KEY) return out({ route: 'respond', status: 401, r: { ok: false, error: 'Not allowed' } });\n\nconst isLoginDoor = h['x-cal-login'] === '1';\nif (isLoginDoor && action !== 'login') return out({ route: 'respond', status: 401, r: { ok: false, error: 'Not allowed' } });\n\nif (action === 'login') {\n  const sd = $getWorkflowStaticData('global');\n  const now = Date.now();\n  if ((sd.lockedUntil || 0) > now) {\n    const min = Math.ceil((sd.lockedUntil - now) / 60000);\n    return out({ route: 'respond', r: { ok: false, error: `Too many tries. Try again in ${min} min.` } });\n  }\n  if (String(p.pin || '') === PIN) { sd.fails = 0; return out({ route: 'respond', r: { ok: true, token: TOKEN } }); }\n  sd.fails = (sd.fails || 0) + 1;\n  if (sd.fails >= 5) { sd.fails = 0; sd.lockedUntil = now + 15 * 60000; return out({ route: 'respond', r: { ok: false, error: 'Too many tries. Try again in 15 min.' } }); }\n  return out({ route: 'respond', r: { ok: false, error: 'Wrong PIN' } });\n}\n\nif (action === 'scan') return out({ route: 'scan', action, p });\nif (['state', 'add', 'update', 'remove', 'settings', 'food'].includes(action)) return out({ route: 'data', action, p });\nreturn out({ route: 'respond', status: 400, r: { ok: false, error: 'Unknown action' } });\n"
+      }
+    },
+    {
+      "id": "0e15f900-c81b-4c52-9eab-c1261b40b9df",
+      "name": "Need Data?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bc074c1d-fb38-4062-abaf-344448e5c849",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "data",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "20739705-4fa7-467b-8dfc-c0f2fe32e795",
+      "name": "Read Sheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/YOUR_SHEET_ID/values:batchGet?ranges=Entries!A:H&ranges=Settings!A:B&ranges=Foods!A:G",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "0d6226fc-9cfd-452c-b910-de62ffbe3fcb",
+      "name": "Build",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Build: turns the sheet into { entries, settings, foods } for the app and, for writes, describes ONE Sheets call in `op`\n// (appendCells / update a row / clear a row / settings). The reply already includes the change, so the app needs no reload.\n// Entries rows: A Id, B Time (ISO, +08:00), C Food, D Kcal, E Emoji, F Portion, G Items (JSON), H Source.\n// Removed entries are cleared (row stays, empty), so row numbers never shift.\nconst { action, p } = $('Gate').first().json;\nconst vr = $input.first().json.valueRanges || [];\nconst rows = (vr[0] && vr[0].values) || [];\nconst setRows = (vr[1] && vr[1].values) || [];\nconst fail = (error) => [{ json: { r: { ok: false, error } } }];\n\nconst settings = { goal: 2000, dayStart: 10 };\nfor (const [k, v] of setRows.slice(1)) if (k in settings && v !== '' && !isNaN(Number(v))) settings[k] = Number(v);\n\nconst entries = [];\nrows.forEach((r, i) => {\n  if (i === 0 || !r || !r[0]) return; // header / cleared row\n  let items = [];\n  try { items = r[6] ? JSON.parse(r[6]) : []; } catch {}\n  entries.push({ row: i + 1, id: r[0], time: r[1] || '', food: r[2] || '', kcal: Math.round(Number(String(r[3] || '0').replace(/,/g, ''))) || 0,\n    emoji: r[4] || '', portion: r[5] || '', items, source: r[7] || '' });\n});\n\n// Saved foods (2026-10-14): staples that always show in Recent without being eaten. Not counted toward any day.\n// Foods rows: A Id, B Added (ISO), C Food, D Kcal, E Emoji, F Portion, G Items (JSON). Removed = cleared row.\nconst foods = [];\n((vr[2] && vr[2].values) || []).forEach((r, i) => {\n  if (i === 0 || !r || !r[0]) return;\n  let items = [];\n  try { items = r[6] ? JSON.parse(r[6]) : []; } catch {}\n  foods.push({ row: i + 1, id: r[0], time: r[1] || '', food: r[2] || '', kcal: Math.round(Number(String(r[3] || '0').replace(/,/g, ''))) || 0,\n    emoji: r[4] || '', portion: r[5] || '', items });\n});\n\n// ISO time in Manila (+08:00), whatever offset the phone sent.\nconst manila = (t) => {\n  const d = new Date(t);\n  if (isNaN(d)) return null;\n  const m = new Date(d.getTime() + 8 * 3600e3).toISOString().slice(0, 19);\n  return m + '+08:00';\n};\nconst clean = (e) => {\n  const id = String(e.id || '');\n  const time = manila(e.time);\n  const kcal = Math.round(Number(e.kcal));\n  const food = String(e.food || '').trim().slice(0, 80);\n  if (!/^[a-z0-9-]{6,40}$/.test(id) || !time || !food || !(kcal >= 0 && kcal <= 10000)) return null;\n  const items = (Array.isArray(e.items) ? e.items : []).slice(0, 12).map((x) => ({\n    name: String(x.name || '').slice(0, 60), portion: String(x.portion || '').slice(0, 40), kcal: Math.round(Number(x.kcal)) || 0 }));\n  return { id, time, food, kcal, emoji: String(e.emoji || '').slice(0, 8), portion: String(e.portion || '').slice(0, 60), items,\n    source: ['photo', 'recent', 'typed'].includes(e.source) ? e.source : 'typed' };\n};\nconst toRow = (e) => [e.id, e.time, e.food, e.kcal, e.emoji, e.portion, e.items.length ? JSON.stringify(e.items) : '', e.source];\n// New rows go in with appendCells (always column A, after the last row with data), NOT values:append: once rows were\n// cleared, values:append guessed the \"table\" wrong and wrote new entries into columns H-O, where the app can't see them\n// (2026-10-15). Tab ids: Entries 1098244156, Foods 198412863.\nconst appendRows = (sheetId, rows) => ({ method: 'POST', url: ':batchUpdate', body: { requests: [{ appendCells: { sheetId, fields: 'userEnteredValue',\n  rows: rows.map((r) => ({ values: r.map((v) => ({ userEnteredValue: typeof v === 'number' ? { numberValue: v } : { stringValue: String(v) } })) })) } }] } });\nconst strip = (list) => list.map(({ row, ...e }) => e);\nconst reply = (op) => [{ json: { op, r: { ok: true, entries: strip(entries), settings, foods: strip(foods) } } }];\n\nif (action === 'state') return reply(null);\n\nif (action === 'add') {\n  const list = (Array.isArray(p.entries) ? p.entries : []).slice(0, 20).map(clean);\n  if (!list.length || list.some((e) => !e)) return fail('Could not save: the entry is missing a name, calories or time.');\n  const have = new Set(entries.map((e) => e.id));\n  const fresh = list.filter((e) => !have.has(e.id)); // a retried request must not log the same food twice\n  if (!fresh.length) return reply(null);\n  entries.push(...fresh);\n  return reply(appendRows(1098244156, fresh.map(toRow)));\n}\n\nif (action === 'update') {\n  const e = clean(p.entry || {});\n  if (!e) return fail('Could not save: the entry is missing a name, calories or time.');\n  const at = entries.findIndex((x) => x.id === e.id);\n  if (at < 0) return fail('That entry is gone (removed on another screen?). Pull to refresh.');\n  const row = entries[at].row;\n  entries[at] = { ...e, row };\n  return reply({ method: 'PUT', url: `values/${encodeURIComponent(`Entries!A${row}:H${row}`)}?valueInputOption=RAW`, body: { values: [toRow(e)] } });\n}\n\nif (action === 'remove') {\n  const at = entries.findIndex((x) => x.id === String(p.id || ''));\n  if (at < 0) return reply(null); // already gone\n  const row = entries[at].row;\n  entries.splice(at, 1);\n  return reply({ method: 'POST', url: `values/${encodeURIComponent(`Entries!A${row}:H${row}`)}:clear`, body: {} });\n}\n\nif (action === 'settings') {\n  const goal = Math.round(Number(p.goal)), dayStart = Math.round(Number(p.dayStart));\n  if (!(goal >= 800 && goal <= 6000)) return fail('Daily goal should be between 800 and 6,000 kcal.');\n  if (!(dayStart >= 0 && dayStart <= 14)) return fail('Day start should be between 12 AM and 2 PM.');\n  settings.goal = goal; settings.dayStart = dayStart;\n  return reply({ method: 'PUT', url: `values/${encodeURIComponent('Settings!A2:B3')}?valueInputOption=RAW`,\n    body: { values: [['goal', String(goal)], ['dayStart', String(dayStart)]] } });\n}\n\nif (action === 'food') {\n  if (p.remove) {\n    const at = foods.findIndex((x) => x.id === String(p.remove));\n    if (at < 0) return reply(null);\n    const row = foods[at].row;\n    foods.splice(at, 1);\n    return reply({ method: 'POST', url: `values/${encodeURIComponent(`Foods!A${row}:G${row}`)}:clear`, body: {} });\n  }\n  const now = manila(new Date().toISOString());\n  const list = (Array.isArray(p.add) ? p.add : []).slice(0, 20).map((f) => clean({ ...f, time: now }));\n  if (!list.length || list.some((f) => !f)) return fail('Could not save: the food is missing a name or calories.');\n  const have = new Set(foods.map((f) => f.id));\n  const fresh = list.filter((f) => !have.has(f.id));\n  if (!fresh.length) return reply(null);\n  foods.push(...fresh.map(({ source, ...f }) => f));\n  return reply(appendRows(198412863, fresh.map((f) => toRow(f).slice(0, 7))));\n}\n\nreturn fail('Unknown action');\n"
+      }
+    },
+    {
+      "id": "ee9d77a3-c589-414e-91d2-49a64274a24e",
+      "name": "Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0e4e4fbe-0d6b-4e66-9fbb-577882a7a381",
+              "leftValue": "={{ $json.op ? \"yes\" : \"no\" }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "173d8b72-43cf-41dc-8822-97f7f9189df2",
+      "name": "Sheets Write",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "method": "={{ $json.op.method }}",
+        "url": "={{ 'https://sheets.googleapis.com/v4/spreadsheets/YOUR_SHEET_ID' + ($json.op.url.startsWith(':') ? '' : '/') + $json.op.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.op.body) }}",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "id": "52a491f6-0b6c-4bcd-a4de-bf13bf13fafb",
+      "name": "Written",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { r: $('Build').first().json.r } }];"
+      }
+    },
+    {
+      "id": "f8b7750b-6ae2-476e-9d1f-5ca10fbba77a",
+      "name": "Scan?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f02ad64a-7daf-4f8b-be69-c5cfed9416f8",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "scan",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "438ebbb6-75ec-412d-a22d-4ffe465e4c0e",
+      "name": "Scan Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Scan Request: builds the Claude Haiku 5.5 call that turns a food photo into a calorie estimate.\n// Cheapest Claude ($0.10 / $0.50 per 1M tokens); effort medium because portion sizing benefits from a little thought\n// (still well under $0.001 a photo; ~1-2 cents when it searches a brand). Structured output so the reply is always valid JSON.\n// The app shrinks the photo to <= 1280 px JPEG first, and sends my optional note + his recent food names.\nconst { p } = $('Gate').first().json;\nconst image = String(p.image || '').replace(/^data:[^,]+,/, '');\nconst mediaType = ['image/jpeg', 'image/png', 'image/webp'].includes(p.mediaType) ? p.mediaType : 'image/jpeg';\nconst note = String(p.note || '').trim().slice(0, 300);\nconst known = (Array.isArray(p.known) ? p.known : []).map((k) => String(k).slice(0, 140)).slice(0, 40);\nif (!image || image.length < 100) return [{ json: { skip: true, r: { ok: false, error: 'No photo received.' } } }];\nif (image.length > 7e6) return [{ json: { skip: true, r: { ok: false, error: 'Photo too big. Try again.' } } }];\n\nconst system = [\n  'You estimate calories from a photo of food for a personal calorie tracker. The person lives in the Philippines, so expect Filipino dishes, rice meals, fast food (Jollibee, McDonald\\'s, Mang Inasal), street food, convenience-store snacks, drinks and home cooking, as well as anything else.',\n  'List each distinct food or drink you can see as its own item: a short plain name, the portion in everyday terms (e.g. \"1 cup rice\", \"2 pcs\", \"1 bowl\", \"16 oz\"), your gram estimate, and its calories.',\n  'Size portions from visual cues: plate and bowl size, utensils, hands, packaging. Count the oil, sauce, sugar and rice you can see; they are where most estimates go wrong. Assume a normal home or restaurant recipe when unsure.',\n  'If a package or menu label with nutrition facts is visible, use it. If the photo is a nutrition label or receipt only, read it.',\n  'Look for brand names, logos, packaging and menu items. If you can read a brand or a chain\\'s menu item, put it in the item name. Unless you already know its calories for sure, use web search to find the official nutrition info (the brand\\'s own site first, then reliable nutrition sites; search in English or in the language on the package) and use that number, scaled to the portion you see. If the first search doesn\\'t turn up the brand\\'s own figure, search once more a different way (the brand\\'s site name, the country it\\'s from, or the package\\'s language) before falling back to generic data. Don\\'t search for unbranded or home-cooked food.',\n  'title: a short name for the whole meal as the person would say it (e.g. \"Chicken adobo with rice\"). If it matches one of the recent foods listed below, reuse that exact name so it groups with past entries.',\n  'emoji: one emoji that best shows the meal.',\n  'confidence: high when the food and portion are clear, medium for normal photos, low when the food is hidden, blurry or ambiguous.',\n  'note: one short sentence on what drives the estimate or what would change it (e.g. \"Assumed 1 cup of rice; say if it was 2.\"). If you searched, say where the number came from (e.g. \"From the Daykey site: 240 kcal per donut.\") or that you couldn\\'t find it and estimated. Plain English, no em dashes.',\n  'If there is no food or drink in the photo, return an empty items list and say so in note.',\n  // Since 2026-10-15 each line carries the calories he saved for one full serving: his number wins over search or a\n  // fresh estimate, so the same food never comes back at a different number.\n  known.length ? `Recent foods he logged before, with the calories he saved for one full serving: ${known.join('; ')}\\nIf the photo shows one of these foods, reuse its exact name and those calories (scaled to the portion you see) instead of searching or estimating again, and say so in note.` : '',\n].filter(Boolean).join('\\n');\n\nconst body = {\n  model: 'claude-haiku-5-5', max_tokens: 6000, system,\n  // Web search (2026-10-15, his ask): only used when a brand is visible. $0.01 a search; basic version because the\n  // _20260209 one isn't on Haiku. Capped at 2 searches a photo.\n  tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2,\n    user_location: { type: 'approximate', country: 'PH', timezone: 'Asia/Manila' } }],\n  output_config: { effort: 'medium', format: { type: 'json_schema', schema: {\n    type: 'object', additionalProperties: false, required: ['title', 'emoji', 'items', 'confidence', 'note'],\n    properties: {\n      title: { type: 'string' },\n      emoji: { type: 'string' },\n      items: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'portion', 'grams', 'kcal'],\n        properties: { name: { type: 'string' }, portion: { type: 'string' }, grams: { type: 'number' }, kcal: { type: 'number' } } } },\n      confidence: { type: 'string', enum: ['low', 'medium', 'high'] },\n      note: { type: 'string' },\n    },\n  } } },\n  messages: [{ role: 'user', content: [\n    { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },\n    { type: 'text', text: note ? `Estimate the calories. What I know about it: ${note}` : 'Estimate the calories.' },\n  ] }],\n};\nreturn [{ json: { body } }];\n"
+      }
+    },
+    {
+      "id": "b7ae0438-01e7-40fc-9d63-0f1ac463d240",
+      "name": "Call AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "11083b57-b193-4a47-889d-3ad6ec94e79b",
+              "leftValue": "={{ $json.skip ? \"no\" : \"yes\" }}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "d7a8d39e-ea0d-498c-bad7-31657f0aa91c",
+      "name": "Claude Haiku",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b91d3e6c-d665-449c-a852-77a97d27e406",
+      "name": "Scan Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Scan Parse: Haiku's reply -> { title, emoji, items, kcal, confidence, note, costUsd }. Nothing is saved here; the app\n// shows the estimate for review and only \"Add\" writes (action \"add\").\nconst res = $input.first().json;\nif (res.error || !Array.isArray(res.content)) {\n  const msg = JSON.stringify(res.error || res).slice(0, 300);\n  const error = /credit balance/i.test(msg) ? 'AI credits ran out (Anthropic account). Top up, then try again. You can still type it in.'\n    : /overloaded|rate/i.test(msg) ? 'The AI is busy. Try again in a minute.' : 'The AI could not read it. Try again in a minute.';\n  return [{ json: { r: { ok: false, error, detail: msg } } }];\n}\nif (res.stop_reason === 'refusal') return [{ json: { r: { ok: false, error: 'The AI declined this photo.' } } }];\nif (res.stop_reason === 'max_tokens') return [{ json: { r: { ok: false, error: 'The AI ran out of room. Try again.' } } }];\nif (res.stop_reason === 'pause_turn') return [{ json: { r: { ok: false, error: 'The brand lookup took too long. Try again, or add a note.' } } }];\n// With web search the reply can hold text before/between searches; the answer is the text after the last search result.\nconst lastTool = res.content.map((b) => b.type).lastIndexOf('web_search_tool_result');\nconst text = res.content.slice(lastTool + 1).filter((b) => b.type === 'text').map((b) => b.text).join('');\nlet out;\ntry { out = JSON.parse(text); } catch { return [{ json: { r: { ok: false, error: 'The AI returned something unreadable. Try again.' } } }]; }\nconst items = (out.items || []).map((i) => ({ name: String(i.name || '').trim().slice(0, 60), portion: String(i.portion || '').trim().slice(0, 40),\n  grams: Math.round(Number(i.grams)) || 0, kcal: Math.max(0, Math.round(Number(i.kcal)) || 0) })).filter((i) => i.name);\nconst u = res.usage || {};\nconst searches = (u.server_tool_use && u.server_tool_use.web_search_requests) || 0; // $10 per 1,000\nconst costUsd = Math.round((((u.input_tokens || 0) * 0.10 + (u.output_tokens || 0) * 0.50) / 1e6 + searches * 0.01) * 1e6) / 1e6;\nreturn [{ json: { r: { ok: true, title: String(out.title || '').trim().slice(0, 80), emoji: String(out.emoji || '').slice(0, 8), items,\n  kcal: items.reduce((a, i) => a + i.kcal, 0), confidence: out.confidence || 'medium', note: String(out.note || '').replace(/—/g, ',').slice(0, 300), searches, costUsd } } }];\n"
+      }
+    },
+    {
+      "id": "9a57fb8b-7870-4d5d-b007-0f1e8179b811",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3120,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ r: $json.r }) }}",
+        "options": {
+          "responseCode": "={{ $json.status || 200 }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate": {
+      "main": [
+        [
+          {
+            "node": "Need Data?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need Data?": {
+      "main": [
+        [
+          {
+            "node": "Read Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scan?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build": {
+      "main": [
+        [
+          {
+            "node": "Write?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write?": {
+      "main": [
+        [
+          {
+            "node": "Sheets Write",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Write": {
+      "main": [
+        [
+          {
+            "node": "Written",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Written": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan?": {
+      "main": [
+        [
+          {
+            "node": "Scan Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan Request": {
+      "main": [
+        [
+          {
+            "node": "Call AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call AI?": {
+      "main": [
+        [
+          {
+            "node": "Claude Haiku",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Haiku": {
+      "main": [
+        [
+          {
+            "node": "Scan Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan Parse": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Manila",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all"
+  }
+}
